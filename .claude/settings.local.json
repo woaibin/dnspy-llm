@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git clone:*)",
+      "Bash(powershell:*)",
+      "Bash(git submodule update:*)",
+      "Bash(git config:*)",
+      "Bash(dotnet build:*)",
+      "Bash(git -c http.proxy=http://127.0.0.1:2805 -c https.proxy=http://127.0.0.1:2805 submodule update --init --recursive)",
+      "Bash(git submodule foreach:*)",
+      "Bash(git submodule deinit:*)",
+      "Bash(start dnSpy/dnSpy/bin/Release/net48/dnSpy.exe)",
+      "Bash(taskkill:*)",
+      "Bash(cmd:*)",
+      "Bash(start:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
