@@ -1,6 +1,6 @@
 # LLM Chat Feature Logic Overview (dnSpy Integration)
 
-This document summarizes how the LLM chat system in this repository works, from menu entry to search over the analyzed project model.
+This document summarizes how the LLM chat system in this repository works, from menu entry to search over the analyzed project model and navigation back into dnSpy.
 
 ## Entry Points & UI Flow
 
@@ -8,7 +8,7 @@ This document summarizes how the LLM chat system in this repository works, from 
 - Menu item: **Start a new LLM chat** (`StartLlmChatCommand` in `MainApp/ViewCommands.cs`) is exported under `GROUP_APP_MENU_LLMCHAT_COMMANDS`.
 - When the item is clicked, the command:
   - Verifies there are loaded modules in `IDocumentTreeView`.
-  - Creates an `LlmChatViewModel` (passing `IDocumentTreeView` and an `ILlmBackend` implementation).
+  - Creates an `LlmChatViewModel` (passing `IDocumentTreeView`, `IDocumentTabService`, and an `ILlmBackend` implementation).
   - Creates and shows `LlmChatWindow` (XAML UI in `LlmChat/LlmChatWindow.xaml`), owned by the main window.
 
 ## Project Snapshot & In-Memory Cache
@@ -21,9 +21,11 @@ This document summarizes how the LLM chat system in this repository works, from 
 ## Chat Loop & LLM Backend
 
 - The chat window binds to:
-  - `Messages`: `ObservableCollection<LlmChatMessageViewModel>` representing the transcript (`role` + `content`).
+  - `Messages`: `ObservableCollection<LlmChatMessageViewModel>` representing the transcript (`Role` + `Content` + optional `SearchResults`).
   - `CurrentUserMessage`: text box content.
+  - `ExcludedModulesText`: advanced filter input (comma-separated module-name substrings).
   - `SendMessageCommand`: triggered by the **Send** button.
+  - `RefineSearchCommand`: triggered by the **Refine** button.
 - On send:
   - The view model adds a user message to `Messages` and clears the input.
   - Builds an `LlmChatContext` (current `AnalyzedProject` + message history).
@@ -36,9 +38,9 @@ This document summarizes how the LLM chat system in this repository works, from 
       - `AssistantMessage` (free-form text for the UI).
       - `SearchKeywords` (keyword *paths* used by the search engine).
       - `ExcludedModules` (array of module-name substrings to skip in search).
-      - Internally, the Python backend can also return a richer `keywords` tree
-        (keyword + parent + layer), which it converts into `SearchKeywords`
-        before sending the response back to dnSpy.
+    - Internally, the Python backend can also return a richer `keywords` tree
+      (keyword + parent + layer), which it converts into `SearchKeywords`
+      before sending the response back to dnSpy.
 
 ## Search Over Analyzed Project
 
@@ -54,7 +56,7 @@ This document summarizes how the LLM chat system in this repository works, from 
     contains one of these substrings is skipped entirely.
   - Returns an array of `LlmSearchResult` with `Kind`, `Name`, `FullName`,
     `ModuleName`, and optional `Signature`.
-- `LlmSearchFormatter.FormatResults(...)` now only emits a short header line
+- `LlmSearchFormatter.FormatResults(...)` only emits a short header line
   (`"Search results from dnSpy analysis cache (click an item below to navigate):"`),
   while each individual `LlmSearchResult` exposes a `DisplayText` property
   that is used by the UI as the clickable label.
@@ -66,10 +68,11 @@ This document summarizes how the LLM chat system in this repository works, from 
   - The textual results summary is still stored in `Content` as a
     `system-search` message.
   - The structured `LlmSearchResult[]` is stored in `SearchResults` and is
-    used by the UI to build clickable entries.
+    used by the UI to build clickable entries under that message.
 - `LlmChatWindow.xaml` renders each message as:
   - A bold `Role` label.
-  - The `Content` text block.
+  - The `Content` text block, inside a colored “bubble” chosen by `LlmChatRoleToBrushConverter`
+    based on the message `Role` (`user`, `assistant`, `system-search`).
   - An optional `ItemsControl` bound to `SearchResults`, where each item is a
     `Hyperlink` (`DisplayText` as the label) that calls back into the window’s
     `SearchResultHyperlink_Click` handler.
@@ -82,18 +85,50 @@ This document summarizes how the LLM chat system in this repository works, from 
 - `LlmChatViewModel.NavigateToSearchResult` now:
   - Finds the matching dnlib module in the current `IDocumentTreeView` by
     comparing `ModuleName` with the loaded modules.
-  - Resolves the corresponding `DocumentTreeNodeData` by matching the
-    `FullName` of the target type/member.
-  - When a node is found, it first navigates to the declaring type and then
-    to the specific member:
-    - Uses `GetDeclaringType(...)` to map `TypeNode`, `MethodNode`,
-      `FieldNode`, `PropertyNode`, and `EventNode` back to their
-      `TypeDef`.
-    - Selects the type node in the `IDocumentTreeView`.
-    - Selects the final member node and calls `Activate()` on it.
-  - This reuses `DocumentTabService`’s existing selection logic so the
-    main code editor behaves as if the user navigated via the Assembly
-    Explorer tree.
+  - Resolves the corresponding dnlib definition (`TypeDef`, `MethodDef`,
+    `FieldDef`, `PropertyDef`, or `EventDef`) by matching the `FullName`
+    of the target type/member.
+  - When a definition is found, it calls
+    `IDocumentTabService.FollowReference(definition)`:
+    - This reuses dnSpy’s standard reference-navigation pipeline
+      (`TreeNodeReferenceDocumentTabContentProvider` etc.).
+    - If *Decompile full type* is enabled in settings, the editor opens
+      the full declaring type as context and moves the caret to the exact
+      member (e.g., `MyClass::MyFunc`) inside that type.
+    - The behavior is identical to clicking a reference hyperlink in the
+      decompiled code: existing tabs, navigation history, and caret
+      centering all behave consistently.
+
+## Advanced Excluded-Modules Filtering
+
+- The bottom of `LlmChatWindow.xaml` exposes an advanced filter section:
+  - A **Refine** button (`RefineSearchCommand`).
+  - An `Exclude modules` text box (`ExcludedModulesText`) where the user can
+    enter comma-separated substrings (for example: `Unity`, `System`, `Engine`).
+  - An editable `ComboBox` bound to `ModuleNames` (all currently loaded module
+    names). Typing filters the list; selecting a module appends it to
+    `ExcludedModulesText` (if not already present) via
+    `LlmChatViewModel.AppendExcludedModule(...)`.
+- On send:
+  - The backend still returns `SearchKeywords` and optional `ExcludedModules`.
+  - `LlmChatViewModel`:
+    - Stores the latest `SearchKeywords` and backend-specified `ExcludedModules`
+      in `lastSearchKeywords` / `lastBackendExcludedModules`.
+    - Parses `ExcludedModulesText` into a `userExcluded` array.
+    - Merges backend- and user-specified module filters (distinct,
+      case-insensitive) and passes the combined list into
+      `LlmSearchEngine.Search(...)`.
+    - Appends the resulting clickable search results as before.
+- On **Refine**:
+  - If there is a previous search (`lastSearchKeywords`), the view model:
+    - Rebuilds the combined excluded-modules list from
+      `lastBackendExcludedModules` + current `ExcludedModulesText`.
+    - Re-runs `LlmSearchEngine.Search(...)` with the same keywords but the
+      updated exclusions.
+    - Adds a new `system-search` message summarizing the refined results (or
+      a short message if no results remain).
+    - Logs the applied exclusions into `LLM Logs` so the refinement step can
+      be debugged.
 
 ## Build Helper Script
 
@@ -104,3 +139,4 @@ This document summarizes how the LLM chat system in this repository works, from 
   - Verifies and then launches
     `dnSpy\dnSpy\dnSpy\bin\Release\net5.0-windows\dnSpy.exe`.
   - Optional `-WaitForClose` parameter waits for the dnSpy process to exit.
+
