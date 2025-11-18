@@ -44,7 +44,7 @@ This document summarizes how the LLM chat system in this repository works, from 
 
 ## Search Over Analyzed Project
 
-- `LlmSearchEngine.Search(AnalyzedProject, keywords, excludedModules)` scans the cached model:
+- `LlmSearchEngine.Search(AnalyzedProject, keywords, excludedModules, excludedTypes)` scans the cached model:
   - `keywords` is an array of *paths* such as
     `"Player Health MaxHealth"` or `"Player Attack AttackSpeed"`.
   - Each path is split into tokens; for a symbol to match, **all** tokens
@@ -54,6 +54,9 @@ This document summarizes how the LLM chat system in this repository works, from 
     any multi-token paths available, to avoid overly fuzzy matches.
   - `excludedModules` is an array of substrings; any module whose name
     contains one of these substrings is skipped entirely.
+  - `excludedTypes` is an array of substrings; any type whose `FullName`
+    contains one of these substrings is skipped entirely (along with its
+    fields/methods/properties/events).
   - Returns an array of `LlmSearchResult` with `Kind`, `Name`, `FullName`,
     `ModuleName`, and optional `Signature`.
 - `LlmSearchFormatter.FormatResults(...)` only emits a short header line
@@ -99,7 +102,7 @@ This document summarizes how the LLM chat system in this repository works, from 
       decompiled code: existing tabs, navigation history, and caret
       centering all behave consistently.
 
-## Advanced Excluded-Modules Filtering
+## Advanced Excluded-Modules & Types Filtering
 
 - The bottom of `LlmChatWindow.xaml` exposes an advanced filter section:
   - A **Refine** button (`RefineSearchCommand`).
@@ -109,26 +112,34 @@ This document summarizes how the LLM chat system in this repository works, from 
     names). Typing filters the list; selecting a module appends it to
     `ExcludedModulesText` (if not already present) via
     `LlmChatViewModel.AppendExcludedModule(...)`.
+  - An `Exclude types` text box (`ExcludedTypesText`) where the user can
+    enter comma-separated substrings of type names/FullNames (e.g. `Player`,
+    `Enemy`, `HealthSystem`).
+  - An editable `ComboBox` bound to `TypeNames` (all analyzed type full names).
+    Typing filters the list; selecting a type appends it to
+    `ExcludedTypesText` via `LlmChatViewModel.AppendExcludedType(...)`.
 - On send:
   - The backend still returns `SearchKeywords` and optional `ExcludedModules`.
   - `LlmChatViewModel`:
     - Stores the latest `SearchKeywords` and backend-specified `ExcludedModules`
       in `lastSearchKeywords` / `lastBackendExcludedModules`.
-    - Parses `ExcludedModulesText` into a `userExcluded` array.
+    - Parses `ExcludedModulesText` and `ExcludedTypesText` into `userExcluded`
+      arrays.
     - Merges backend- and user-specified module filters (distinct,
-      case-insensitive) and passes the combined list into
-      `LlmSearchEngine.Search(...)`.
+      case-insensitive) and passes the combined module list plus the type
+      exclusions into `LlmSearchEngine.Search(...)`.
     - Appends the resulting clickable search results as before.
 - On **Refine**:
   - If there is a previous search (`lastSearchKeywords`), the view model:
     - Rebuilds the combined excluded-modules list from
       `lastBackendExcludedModules` + current `ExcludedModulesText`.
+    - Parses the current `ExcludedTypesText` into a type-exclusion list.
     - Re-runs `LlmSearchEngine.Search(...)` with the same keywords but the
-      updated exclusions.
+      updated module and type exclusions.
     - Adds a new `system-search` message summarizing the refined results (or
       a short message if no results remain).
-    - Logs the applied exclusions into `LLM Logs` so the refinement step can
-      be debugged.
+    - Logs the applied exclusions (modules and types) into `LLM Logs` so the
+      refinement step can be debugged.
 
 ## Build Helper Script
 
