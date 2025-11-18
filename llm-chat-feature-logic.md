@@ -44,7 +44,7 @@ This document summarizes how the LLM chat system in this repository works, from 
 
 ## Search Over Analyzed Project
 
-- `LlmSearchEngine.Search(AnalyzedProject, keywords, excludedModules, excludedTypes)` scans the cached model:
+- `LlmSearchEngine.Search(AnalyzedProject, keywords, includedModules, excludedModules, excludedTypes)` scans the cached model:
   - `keywords` is an array of *paths* such as
     `"Player Health MaxHealth"` or `"Player Attack AttackSpeed"`.
   - Each path is split into tokens; for a symbol to match, **all** tokens
@@ -52,6 +52,8 @@ This document summarizes how the LLM chat system in this repository works, from 
     symbol's `Name` or `FullName`.
   - Single-token paths (e.g., just `"Player"`) are ignored when there are
     any multi-token paths available, to avoid overly fuzzy matches.
+  - `includedModules` is an array of substrings; if non-empty, only modules
+    whose names contain at least one of these substrings are considered.
   - `excludedModules` is an array of substrings; any module whose name
     contains one of these substrings is skipped entirely.
   - `excludedTypes` is an array of substrings; any type whose `FullName`
@@ -102,10 +104,13 @@ This document summarizes how the LLM chat system in this repository works, from 
       decompiled code: existing tabs, navigation history, and caret
       centering all behave consistently.
 
-## Advanced Excluded-Modules & Types Filtering
+## Advanced Include/Exclude Filtering
 
 - The bottom of `LlmChatWindow.xaml` exposes an advanced filter section:
   - A **Refine** button (`RefineSearchCommand`).
+  - An `Include modules` text box where the user can enter comma-separated
+    substrings; if any are present, only modules whose names contain at least
+    one of these substrings are included in search.
   - An `Exclude modules` text box (`ExcludedModulesText`) where the user can
     enter comma-separated substrings (for example: `Unity`, `System`, `Engine`).
   - An editable `ComboBox` bound to `ModuleNames` (all currently loaded module
