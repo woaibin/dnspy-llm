@@ -115,9 +115,11 @@ This document summarizes how the LLM chat system in this repository works, from 
   - An `Exclude types` text box (`ExcludedTypesText`) where the user can
     enter comma-separated substrings of type names/FullNames (e.g. `Player`,
     `Enemy`, `HealthSystem`).
-  - An editable `ComboBox` bound to `TypeNames` (all analyzed type full names).
-    Typing filters the list; selecting a type appends it to
-    `ExcludedTypesText` via `LlmChatViewModel.AppendExcludedType(...)`.
+  - An editable `ComboBox` bound to `TypeSuggestions`. The view model does
+    not pre-cache all type names; instead, when `TypeSearchText` has at least
+    3 characters, it searches `AnalyzedProject` for matching type full names
+    and populates `TypeSuggestions` with up to 100 matches. Selecting a type
+    appends it to `ExcludedTypesText` via `LlmChatViewModel.AppendExcludedType(...)`.
 - On send:
   - The backend still returns `SearchKeywords` and optional `ExcludedModules`.
   - `LlmChatViewModel`:
@@ -150,4 +152,3 @@ This document summarizes how the LLM chat system in this repository works, from 
   - Verifies and then launches
     `dnSpy\dnSpy\dnSpy\bin\Release\net5.0-windows\dnSpy.exe`.
   - Optional `-WaitForClose` parameter waits for the dnSpy process to exit.
-
