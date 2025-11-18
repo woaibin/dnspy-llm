@@ -23,7 +23,8 @@ This document summarizes how the LLM chat system in this repository works, from 
 - The chat window binds to:
   - `Messages`: `ObservableCollection<LlmChatMessageViewModel>` representing the transcript (`Role` + `Content` + optional `SearchResults`).
   - `CurrentUserMessage`: text box content.
-  - `ExcludedModulesText`: advanced filter input (comma-separated module-name substrings).
+  - `IncludedModulesText`: advanced filter input (comma-separated module-name substrings to include).
+  - `ExcludedModulesText`: advanced filter input (comma-separated module-name substrings to exclude).
   - `SendMessageCommand`: triggered by the **Send** button.
   - `RefineSearchCommand`: triggered by the **Refine** button.
 - On send:
@@ -108,15 +109,16 @@ This document summarizes how the LLM chat system in this repository works, from 
 
 - The bottom of `LlmChatWindow.xaml` exposes an advanced filter section:
   - A **Refine** button (`RefineSearchCommand`).
-  - An `Include modules` text box where the user can enter comma-separated
-    substrings; if any are present, only modules whose names contain at least
-    one of these substrings are included in search.
+  - An `Include modules` text box (`IncludedModulesText`) where the user can
+    enter comma-separated substrings; if any are present, only modules whose
+    names contain at least one of these substrings are included in search.
   - An `Exclude modules` text box (`ExcludedModulesText`) where the user can
     enter comma-separated substrings (for example: `Unity`, `System`, `Engine`).
   - An editable `ComboBox` bound to `ModuleNames` (all currently loaded module
     names). Typing filters the list; selecting a module appends it to
-    `ExcludedModulesText` (if not already present) via
-    `LlmChatViewModel.AppendExcludedModule(...)`.
+    either `IncludedModulesText` or `ExcludedModulesText` depending on which
+    drop-down is used, via `AppendIncludedModule(...)` /
+    `AppendExcludedModule(...)`.
   - An `Exclude types` text box (`ExcludedTypesText`) where the user can
     enter comma-separated substrings of type names/FullNames (e.g. `Player`,
     `Enemy`, `HealthSystem`).
@@ -124,7 +126,9 @@ This document summarizes how the LLM chat system in this repository works, from 
     not pre-cache all type names; instead, when `TypeSearchText` has at least
     3 characters, it searches `AnalyzedProject` for matching type full names
     and populates `TypeSuggestions` with up to 100 matches. Selecting a type
-    appends it to `ExcludedTypesText` via `LlmChatViewModel.AppendExcludedType(...)`.
+    appends it to either `IncludedTypesText` or `ExcludedTypesText` depending
+    on which drop-down is used, via `AppendIncludedType(...)` /
+    `AppendExcludedType(...)`.
 - On send:
   - The backend still returns `SearchKeywords` and optional `ExcludedModules`.
   - `LlmChatViewModel`:
