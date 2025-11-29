@@ -79,6 +79,7 @@ def _without_http_proxy() -> Any:
             os.environ[name] = value
 
 
+
 def _ensure_claude_env() -> None:
     """
     Ensure required Claude / Anthropic environment variables are present
@@ -87,9 +88,8 @@ def _ensure_claude_env() -> None:
     configured for this dnSpy fork.
     """
     default_vars = {
-        "ANTHROPIC_AUTH_TOKEN": "0b08d9b1f94144288cf715173bd5daa1.Kv3M5RNmjKwqHtxJ",
-        "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "ANTHROPIC_AUTH_TOKEN": "sk-OWMXwWM9n3a9ZP0qsnZDfdrsBtRZLKtaS9C0F5ly7iid08rr",
+        "ANTHROPIC_BASE_URL": "https://yunwu.ai",
     }
     for key, value in default_vars.items():
         if not os.getenv(key):
@@ -100,11 +100,25 @@ def _ensure_claude_env() -> None:
 def read_request() -> Dict[str, Any]:
     """Read the JSON LlmBackendRequest from stdin."""
     log("read_request(): start")
-    if sys.stdin.isatty():
+    stdin = sys.stdin.buffer
+    if stdin.isatty():
         log("read_request(): stdin is TTY, returning empty request")
         return {}
-    data = sys.stdin.read()
-    log(f"read_request(): got {len(data)} bytes from stdin")
+
+    raw_bytes = stdin.read()
+    log(f"read_request(): got {len(raw_bytes)} bytes from stdin")
+
+    if not raw_bytes.strip():
+        log("read_request(): empty/whitespace input, returning empty request")
+        return {}
+
+    try:
+        data = raw_bytes.decode("utf-8", errors="replace")
+    except Exception as ex:
+        log(f"read_request(): failed to decode stdin as utf-8: {ex!r}")
+        # Fall back to default text decoding as a last resort.
+        data = raw_bytes.decode(errors="replace")
+
     # Dump the raw request payload (truncated) to a file so we can inspect
     # what dnSpy sent without writing huge data or failing on bad surrogates.
     try:
@@ -462,6 +476,13 @@ def call_openai_structured(last_user: str, project_overview: str, *, mode: str =
         def _call_claude_cli_automation(prompt_user: str, prompt_overview: str) -> Dict[str, Any]:
             # Keep the API description short and precise so the model
             # focuses on using the automation server effectively.
+            # Use an explicit, absolute path in the instructions so the model
+            # doesn't have to reason about "current working directory".
+            base_dir = os.path.dirname(__file__)
+            temp_prompt_path = os.path.join(base_dir, "temp_prompts.md")
+            result_json_path = os.path.join(base_dir, "claude_automation_result.json")
+            result_json_display = result_json_path.replace("\\", "/")
+
             system_prompt = (
                 "# Overall Characteristics"
                 "You are a professional Unity/.NET reverse-engineering assistant.\n"
@@ -470,9 +491,10 @@ def call_openai_structured(last_user: str, project_overview: str, *, mode: str =
                 "# Tools"
                 "You are provided with a HTTP look up server to look up the unity symbols according to the user's request"
                 "A local automation HTTP server is available at http://127.0.0.1:5015.\n"
-                "It exposes two endpoints:\n"
-                "  - GET /api/search/broad?pattern=...&maxResults=... : regex search over modules, types, and members.\n"
-                "  - GET /api/lookup/clear?identifier=...            : resolve an identifier to an exact type.\n"
+                "It exposes three endpoints:\n"
+                "  - GET /api/search/broad?pattern=...&maxResults=...       : regex search over modules, types, and members.\n"
+                "  - GET /api/lookup/clear?identifier=...                   : resolve an identifier to an exact type.\n"
+                "  - GET /api/search/typeRefs?identifier=...&maxResults=... : find types that *use* a given spec type via base type or member signatures.\n"
                 "Use these APIs as needed to locate gameplay-relevant types and members.\n"
                 
                 "# Overall Workflow\n"
@@ -490,9 +512,12 @@ def call_openai_structured(last_user: str, project_overview: str, *, mode: str =
                 "2. when the users tryna locate properties like attack power, health and stuff, most closest to the player class, we should not consider:\n"
                 "    a. types and classes dat are too basic and abstract, go look further and deeper, research into the real player class dats using this logic\n"
                 "    b. stuff far away or seems not relevent to the essential player class\n"
+                "    c. UI stuff, audio/video stuff, animation stuff, infrastructure/engine stuff etc\n"
+                "    d. for explanatory text, consider using Chinese."
 
                 "# Finalized Results\n"
-                "Return ONLY a single JSON object with this exact shape and nothing else:\n"
+                f"Write ONLY a single JSON object with this exact shape into the file at path '{result_json_display}' "
+                "and nothing else:\n"
                 "{\n"
                 '  \"AssistantMessage\": \"free-form explanation text\",\n'
                 '  \"SearchKeywords\": [\"keyword1\", \"keyword2\", ...],\n'
@@ -501,9 +526,8 @@ def call_openai_structured(last_user: str, project_overview: str, *, mode: str =
             )
 
             user_prompt = (
-                "Project overview (truncated):\n"
                 f"{prompt_overview}\n\n"
-                "User question and context:\n"
+                "# User question and context:\n"
                 f"{prompt_user}\n"
             )
 
@@ -523,8 +547,6 @@ def call_openai_structured(last_user: str, project_overview: str, *, mode: str =
             # a stable place to read the full context from, write the combined
             # prompt to a temporary markdown file and pass a short pointer
             # prompt that tells it to read that file instead.
-            base_dir = os.path.dirname(__file__)
-            temp_prompt_path = os.path.join(base_dir, "temp_prompts.md")
             try:
                 with open(temp_prompt_path, "w", encoding="utf-8") as f:
                     f.write(full_prompt)
@@ -532,11 +554,18 @@ def call_openai_structured(last_user: str, project_overview: str, *, mode: str =
             except Exception as ex:
                 log(f"_call_claude_cli_automation(): failed to write {temp_prompt_path}: {ex!r}")
 
+            # Ensure we start from a clean result file so we don't accidentally
+            # read stale data if Claude fails to write a new result.
+            try:
+                if os.path.exists(result_json_path):
+                    os.remove(result_json_path)
+                    log(f"_call_claude_cli_automation(): deleted existing result file {result_json_path}")
+            except Exception as ex:
+                log(f"_call_claude_cli_automation(): failed to delete old result file {result_json_path}: {ex!r}")
+
             short_prompt = (
-                "The file 'temp_prompts.md' in the current working directory "
-                "contains the full system instructions, project overview, and "
-                "user question.\n"
-                "Carefully read that file, then follow its instructions."
+                f"The file 'temp_prompts.md' in the current working directory "
+                f"Carefully read that file, then follow its instructions."
             )
 
             # Ensure required Claude/Anthropic environment variables are present
@@ -559,12 +588,11 @@ def call_openai_structured(last_user: str, project_overview: str, *, mode: str =
             )
 
             # Escape any double quotes so the prompt can be passed as a single
-            # argument in a shell command string, and ask Claude CLI to emit
-            # JSON so we can parse it directly.
+            # argument in a shell command string.
             escaped_prompt = short_prompt.replace('"', '\\"')
             cmd = (
                 f'{cli_exe} -p "{escaped_prompt}" '
-                "--dangerously-skip-permissions --output-format json"
+                "--dangerously-skip-permissions --output-format json --model claude-sonnet-4-5-20250929"
             )
             log(f"call_openai_structured(): Claude CLI full command: {cmd}")
 
@@ -576,13 +604,15 @@ def call_openai_structured(last_user: str, project_overview: str, *, mode: str =
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     shell=True,
+                    cwd=base_dir,
                     encoding="utf-8",
                     errors="replace",
                 )
 
             log(f"call_openai_structured(): Claude CLI exited with code {proc.returncode}.")
-            if proc.stderr:
-                log(f"call_openai_structured(): Claude CLI stderr: {proc.stderr.strip()}")
+            stderr_text = proc.stderr.strip() if proc.stderr else ""
+            if stderr_text:
+                log(f"call_openai_structured(): Claude CLI stderr: {stderr_text}")
 
             raw_output = proc.stdout or ""
             try:
@@ -599,36 +629,59 @@ def call_openai_structured(last_user: str, project_overview: str, *, mode: str =
             if proc.returncode != 0:
                 raise RuntimeError(f"Claude CLI failed with exit code {proc.returncode}")
 
-            output = raw_output.strip()
-            if not output:
-                raise RuntimeError("Claude CLI returned empty output")
+            # Prefer the JSON file result if Claude was able to write it;
+            # otherwise, fall back to parsing stdout as before so we still
+            # get a usable response.
+            data: Dict[str, Any]
+            if os.path.exists(result_json_path):
+                try:
+                    with open(result_json_path, "r", encoding="utf-8", errors="replace") as f:
+                        file_text = f.read()
 
-            # Try two formats:
-            #  1) Direct JSON object with the expected keys.
-            #  2) Claude CLI envelope JSON (with a \"result\" field containing
-            #     our own JSON payload as a string). If both fail, fall back
-            #     to treating the raw output as a plain assistant message so
-            #     the user can see exactly what Claude returned.
-            text = _strip_markdown_fence(output)
+                    try:
+                        data = json.loads(file_text)
+                    except Exception as ex:
+                        raise RuntimeError(f"Failed to parse Claude result JSON from {result_json_path}: {ex!r}")
+                finally:
+                    # Best-effort cleanup of the result file so each run starts fresh.
+                    try:
+                        if os.path.exists(result_json_path):
+                            os.remove(result_json_path)
+                            log(f"_call_claude_cli_automation(): deleted result file {result_json_path}")
+                    except Exception as ex:
+                        log(f"_call_claude_cli_automation(): failed to delete result file {result_json_path}: {ex!r}")
+            else:
+                log(
+                    f"_call_claude_cli_automation(): result JSON file {result_json_path} "
+                    "not found; falling back to parsing stdout."
+                )
+                output = raw_output.strip()
+                if not output:
+                    raise RuntimeError(
+                        "Claude CLI did not write result JSON file and stdout is empty; "
+                        "cannot obtain automation result."
+                    )
 
-            try:
-                obj = json.loads(text)
-                if isinstance(obj, dict) and "result" in obj and isinstance(obj["result"], str):
-                    inner = _strip_markdown_fence(obj["result"])
-                    data = json.loads(inner)
-                else:
-                    data = obj
-            except Exception:
-                # As a final fallback, surface the raw text as the assistant
-                # message instead of raising, so the user can inspect it.
-                return {
-                    "AssistantMessage": output,
-                    "SearchKeywords": [],
-                    "ExcludedModules": [],
-                }
+                text = _strip_markdown_fence(output)
+
+                try:
+                    obj = json.loads(text)
+                    if isinstance(obj, dict) and "result" in obj and isinstance(obj["result"], str):
+                        inner = _strip_markdown_fence(obj["result"])
+                        data = json.loads(inner)
+                    else:
+                        data = obj
+                except Exception:
+                    # As a final fallback, surface the raw text as the assistant
+                    # message instead of raising, so the user can inspect it.
+                    return {
+                        "AssistantMessage": output,
+                        "SearchKeywords": [],
+                        "ExcludedModules": [],
+                    }
 
             if not isinstance(data, dict):
-                raise ValueError("Claude CLI output is not a JSON object")
+                raise ValueError("Claude result JSON is not an object")
 
             return data
 
@@ -954,6 +1007,8 @@ def main() -> None:
     req = read_request()
     messages = req.get("Messages", []) or []
     project = req.get("Project", {}) or {}
+    debug_mode = bool(req.get("DebugMode"))
+    log(f"main(): debug_mode={debug_mode}")
 
     last_user_raw = extract_last_user_message(messages)
     if not last_user_raw:
@@ -963,6 +1018,19 @@ def main() -> None:
                 "Ask me about types, methods, or modules in the loaded assemblies."
             ),
             "SearchKeywords": [],
+            "ExcludedModules": [],
+        }
+        json.dump(resp, sys.stdout)
+        return
+
+    # In debug mode, bypass any Claude/OpenAI calls and just echo the
+    # raw user message back as a single keyword path. This lets the host
+    # app drive searches directly without consuming LLM tokens.
+    if debug_mode:
+        log("main(): debug_mode is true, echoing last user message as SearchKeywords without calling OpenAI/Claude.")
+        resp = {
+            "AssistantMessage": "",
+            "SearchKeywords": [last_user_raw],
             "ExcludedModules": [],
         }
         json.dump(resp, sys.stdout)

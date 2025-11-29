@@ -16,6 +16,8 @@ HTTP endpoints (default: http://127.0.0.1:5015/):
       -> [ { kind, name, fullName, moduleName, assemblyPath, signature }, ... ]
   - GET  /api/lookup/clear?identifier=...
       -> { status: "ok" | "ambiguous" | "not_found", ... }
+  - GET  /api/search/typeRefs?identifier=...&maxResults=...
+      -> { identifier, hits: [ { kind, name, fullName, moduleName, assemblyPath, sourcePath, reasons }, ... ] }
 
 This mirrors the .NET-based design but avoids extra build/restore
 complexity by running as a standalone Python script.
@@ -50,19 +52,22 @@ def read_initial_project_from_stdin() -> None:
     """
     global PROJECT
 
-    if sys.stdin.isatty():
+    stdin = sys.stdin.buffer
+
+    if stdin.isatty():
         log("stdin is a TTY, no project JSON provided; starting with empty project.")
         PROJECT = {"Modules": []}
         return
 
-    raw = sys.stdin.read()
-    if not raw.strip():
+    raw_bytes = stdin.read()
+    if not raw_bytes.strip():
         log("stdin is empty/whitespace; starting with empty project.")
         PROJECT = {"Modules": []}
         return
 
     try:
-        obj = json.loads(raw)
+        text = raw_bytes.decode("utf-8", errors="replace")
+        obj = json.loads(text)
     except Exception as ex:
         log(f"failed to parse JSON from stdin: {ex!r}")
         PROJECT = {"Modules": []}
@@ -229,6 +234,131 @@ def clear_lookup(identifier: str) -> Dict[str, Any]:
     return {"status": "ambiguous", "identifier": ident, "candidates": matches}
 
 
+def find_type_references(identifier: str, max_results: int) -> Dict[str, Any]:
+    """
+    Find types that *use* a given type (by name) in their base type
+    or member signatures.
+
+    The identifier is matched case-insensitively against type names and
+    full names to discover the "target" types, and then we scan all
+    types' BaseType and member Signatures / FullName strings for
+    occurrences of those targets (or the raw identifier as a fallback).
+    """
+    ident = identifier.strip().strip('"')
+    if not ident:
+        raise ValueError("empty identifier")
+
+    max_results = max(1, min(max_results or 500, 500))
+    ident_lower = ident.lower()
+
+    target_names = set()
+    target_full_names = set()
+
+    # First pass: discover the concrete type names that correspond to the identifier.
+    for _, t in _iter_types():
+        t_name = (t.get("Name") or "").strip()
+        t_full = (t.get("FullName") or "").strip()
+        if not t_name and not t_full:
+            continue
+        name_lower = t_name.lower() if t_name else ""
+        full_lower = t_full.lower() if t_full else ""
+        if (
+            name_lower == ident_lower
+            or full_lower == ident_lower
+            or (full_lower and ident_lower in full_lower)
+        ):
+            if t_name:
+                target_names.add(t_name)
+            if t_full:
+                target_full_names.add(t_full)
+
+    # Always fall back to the raw identifier so "money" still works
+    # even if we didn't find an exact type match above.
+    tokens = {ident}
+    tokens.update(target_names)
+    tokens.update(target_full_names)
+    tokens = {tok for tok in tokens if tok}
+
+    # Track the exact full names of the "spec" types so we can
+    # optionally avoid returning the type itself as a "reference".
+    spec_type_full_names = {full for full in target_full_names if full}
+
+    def contains_token(s: str) -> bool:
+        if not s:
+            return False
+        s_lower = s.lower()
+        for tok in tokens:
+            if tok.lower() in s_lower:
+                return True
+        return False
+
+    results: List[Dict[str, Any]] = []
+
+    for mod, t in _iter_types():
+        t_name = (t.get("Name") or "").strip()
+        t_full = (t.get("FullName") or "").strip()
+
+        # Skip the spec type itself unless it references the target via
+        # some other path (e.g., it has a field of its own type); this
+        # keeps "find refs of Money" focused on *other* types.
+        if spec_type_full_names and t_full in spec_type_full_names:
+            continue
+
+        mod_name = (mod.get("Name") or "").strip()
+        assembly_path = (
+            (mod.get("AssemblyPath") or "").strip()
+            or (mod.get("ModuleFilePath") or "").strip()
+            or (mod.get("FileName") or "").strip()
+        )
+
+        reasons: List[str] = []
+
+        base_type = (t.get("BaseType") or "").strip()
+        if contains_token(base_type):
+            reasons.append(f"baseType={base_type}")
+
+        for m in _iter_members(t):
+            m_name = (m.get("Name") or "").strip()
+            m_full = (m.get("FullName") or "").strip()
+            sig = (m.get("Signature") or "").strip()
+            member_type = (m.get("MemberType") or "").strip()
+
+            if contains_token(sig) or contains_token(m_full):
+                desc = member_type or "member"
+                if m_name:
+                    desc += f" {m_name}"
+                if sig:
+                    desc += f" sig={sig}"
+                elif m_full:
+                    desc += f" fullName={m_full}"
+                reasons.append(desc)
+
+            if len(reasons) >= 10:
+                # Avoid unbounded reason lists per type; a few examples are enough.
+                break
+
+        if reasons:
+            results.append(
+                {
+                    "kind": "typeRef",
+                    "name": t_name,
+                    "fullName": t_full or t_name,
+                    "moduleName": mod_name,
+                    "assemblyPath": assembly_path,
+                    "sourcePath": (t.get("SourceFilePath") or "").strip(),
+                    "reasons": reasons,
+                }
+            )
+            if len(results) >= max_results:
+                break
+
+    log(
+        "find_type_references(): identifier=%r, max_results=%d, hits=%d"
+        % (ident, max_results, len(results))
+    )
+    return {"identifier": ident, "hits": results}
+
+
 def extract_file_to_temp(source_path: str) -> str:
     """
     Read the raw contents of a file (e.g., a DLL-stored resource), write
@@ -281,6 +411,21 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": str(ex)})
                 return
             self._send_json(200, results)
+            return
+
+        if path == "/api/search/typeRefs":
+            params = self._parse_query(query)
+            identifier = params.get("identifier") or ""
+            max_results = int(params.get("maxResults") or "500")
+            if not identifier:
+                self._send_json(400, {"error": "missing 'identifier' query parameter"})
+                return
+            try:
+                result = find_type_references(identifier, max_results)
+            except ValueError as ex:
+                self._send_json(400, {"error": str(ex)})
+                return
+            self._send_json(200, result)
             return
 
         if path == "/api/lookup/clear":

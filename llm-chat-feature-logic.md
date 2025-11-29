@@ -48,11 +48,25 @@ This document summarizes how the LLM chat system in this repository works, from 
 - `LlmSearchEngine.Search(AnalyzedProject, keywords, includedModules, excludedModules, excludedTypes)` scans the cached model:
   - `keywords` is an array of *paths* such as
     `"Player Health MaxHealth"` or `"Player Attack AttackSpeed"`.
-  - Each path is split into tokens; for a symbol to match, **all** tokens
-    from **at least one** path must be present (case-insensitive) in the
-    symbol's `Name` or `FullName`.
-  - Single-token paths (e.g., just `"Player"`) are ignored when there are
-    any multi-token paths available, to avoid overly fuzzy matches.
+  - Each path is split into tokens; for a symbol to match a given *fuzzy*
+    path, **all** tokens from that path must be present (case-insensitive)
+    in the symbol's `Name` or `FullName`.
+  - Single-token paths (e.g. just `"Player"`) are now used, they are no
+    longer ignored when multi-token paths are present:
+    - In normal **chat** mode, they behave like any other fuzzy path
+      (substring match against names / full names).
+    - In **DAT / automation mode**, single-token paths are treated as
+      *exact type-name* queries, while multi-token paths stay fuzzy:
+      - All one-token paths are collected (e.g. `"Money"`, `"Player"`,
+        `"Weapon"` from `["Money", "Player", "Weapon", "Play Effect"]`).
+      - For each such token, only **types** whose simple name or last
+        `FullName` segment equals the token (case-insensitive) are
+        returned (e.g. `Player` or `MyGame.Player` match `"player"`).
+      - Types whose names only *contain* the token as a substring, such
+        as `MyPlayer`, `LocalPlayer`, or `Remoteplayer`, are **not**
+        returned for that exact-token query.
+      - Multi-token paths such as `"Play Effect"` continue to use the
+        fuzzy matching rule and can match both types and members.
   - `includedModules` is an array of substrings; if non-empty, only modules
     whose names contain at least one of these substrings are considered.
   - `excludedModules` is an array of substrings; any module whose name
@@ -109,6 +123,12 @@ This document summarizes how the LLM chat system in this repository works, from 
 
 - The bottom of `LlmChatWindow.xaml` exposes an advanced filter section:
   - A **Refine** button (`RefineSearchCommand`).
+  - A **Debug mode** checkbox (`IsDebugMode` on the view model):
+    - When enabled, dnSpy sends `DebugMode: true` in the backend request.
+    - The Python backend (`llm_chat_backend.py`) skips Claude/OpenAI and
+      simply echoes the last user message as a single keyword path in
+      `SearchKeywords`, so you can drive searches directly without using
+      LLM tokens.
   - An `Include modules` text box (`IncludedModulesText`) where the user can
     enter comma-separated substrings; if any are present, only modules whose
     names contain at least one of these substrings are included in search.

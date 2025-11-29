@@ -30,7 +30,7 @@ This file captures the **actual behavior** of the current fork as implemented in
   - `Mode`: `"chat"`, `"automation"`, or `"file"`.
 
 - **Mode selection in dnSpy**:
-  - `LlmChatViewModel` constructs `LlmChatContext(project, messages, isAutomationMode)`.
+  - `LlmChatViewModel` constructs `LlmChatContext(project, messages, isAutomationMode, isDebugMode)`.
   - `LlmBackendRequest.Create(...)` copies `IsAutomationMode` to `Mode`:
     - `"chat"` – normal chat.
     - `"automation"` – chat with automation enabled.
@@ -122,6 +122,30 @@ This file captures the **actual behavior** of the current fork as implemented in
     - Response: array of:
       - `kind`: `"module" | "type" | "member"`.
       - `name`, `fullName`, `moduleName`, `assemblyPath`, `signature`.
+  - `/api/search/typeRefs` (new in this fork):
+    - Query:
+      - `identifier`: string, typically a type name or full name (e.g. `"Money"` or `"MyApp.Domain.Money"`).
+      - `maxResults`: optional, capped at 500.
+    - Behavior:
+      - Normalizes `identifier` (trim, strip quotes) and discovers matching "spec" types by `Name` / `FullName` (case-insensitive).
+      - Builds a token set from:
+        - The raw `identifier`.
+        - Matching type simple names.
+        - Matching type full names.
+      - Scans all types to find **referencing types** where:
+        - `BaseType` contains any token, or
+        - Any member (`Fields`, `Methods`, `Properties`, `Events`) has a `Signature` / `FullName` containing a token.
+      - Skips the spec type itself (by `FullName`) so results focus on *other* types that reference it.
+      - Truncates per-type "reason" lists to a small number and stops after `maxResults` hits.
+      - Logging (added):
+        - `find_type_references(): identifier='...', max_results=..., hits=N`.
+    - Response:
+      - Object with:
+        - `identifier`: the normalized identifier string.
+        - `hits`: array of referencing-type objects:
+          - `kind`: `"typeRef"`.
+          - `name`, `fullName`, `moduleName`, `assemblyPath`, `sourcePath`.
+          - `reasons`: array of short strings explaining how the spec type is referenced (e.g. `"baseType=MyApp.Money"`, `"field price sig=MyApp.Money"`).
   - `/api/lookup/clear`:
     - Query:
       - `identifier`: string, usually a type `FullName`.
@@ -169,3 +193,17 @@ This file captures the **actual behavior** of the current fork as implemented in
     - The analyzed project exists.
     - `llm_automation_server.py` is running.
   - Claude/Poe becomes an optional external helper, not a dependency for automation.
+"  ### 2.3 Debug mode (all modes)
+
+  - When DebugMode is 	rue in the incoming request:
+    - main() logs debug_mode=True and **does not** call
+      call_openai_structured or any Claude/OpenAI tooling.
+    - It returns a minimal response:
+      - AssistantMessage: empty string.
+      - SearchKeywords: a single-element array containing the raw last
+        user message.
+      - ExcludedModules: empty array.
+    - This lets dnSpy drive LlmSearchEngine.Search(...) directly from the
+      user text without consuming LLM tokens, which is useful when tuning
+      search behavior or debugging DAT/automation keywords.
+"
