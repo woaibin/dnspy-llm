@@ -1,0 +1,678 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Threading;
+using Cysharp.Threading.Tasks;
+using Cysharp.Threading.Tasks.CompilerServices;
+using RCGMaker.Core.Attributes;
+using RCGMaker.Test;
+using RCGSetting;
+using UnityEngine;
+using UnityEngine.Serialization;
+
+// Token: 0x020001C3 RID: 451
+public class EffectDealer : MonoBehaviour, IEffectDealer, IPoolObject, IResetter, IClearReference
+{
+	// Token: 0x170000FD RID: 253
+	// (get) Token: 0x06000980 RID: 2432 RVA: 0x0002B4C7 File Offset: 0x000296C7
+	public bool IsValid
+	{
+		get
+		{
+			return this.conditions.IsAllValid();
+		}
+	}
+
+	// Token: 0x170000FE RID: 254
+	// (get) Token: 0x06000981 RID: 2433 RVA: 0x0002B4D4 File Offset: 0x000296D4
+	[PreviewInInspector]
+	public FXDealerMaterialTag FxMaterialTag
+	{
+		get
+		{
+			if (this.fxMateiralTag != null)
+			{
+				return this.fxMateiralTag;
+			}
+			if (this.fxProvider != null)
+			{
+				return this.fxProvider.fxMateiralTag;
+			}
+			return null;
+		}
+	}
+
+	// Token: 0x170000FF RID: 255
+	// (get) Token: 0x06000982 RID: 2434 RVA: 0x0002B506 File Offset: 0x00029706
+	[PreviewInInspector]
+	public SoundDealerMaterialTag SoundMaterialTag
+	{
+		get
+		{
+			if (this.soundMateiralTag != null)
+			{
+				return this.soundMateiralTag;
+			}
+			if (this.fxProvider != null)
+			{
+				return this.fxProvider.soundMateiralTag;
+			}
+			return null;
+		}
+	}
+
+	// Token: 0x17000100 RID: 256
+	// (get) Token: 0x06000983 RID: 2435 RVA: 0x0002B538 File Offset: 0x00029738
+	public Component OwnerComponent
+	{
+		get
+		{
+			return this.DealerEffectOwner as Component;
+		}
+	}
+
+	// Token: 0x17000101 RID: 257
+	// (get) Token: 0x06000984 RID: 2436 RVA: 0x0002B545 File Offset: 0x00029745
+	private bool HasValueProvider
+	{
+		get
+		{
+			return base.GetComponent<IEffectDealerValueProvider>() != null;
+		}
+	}
+
+	// Token: 0x17000102 RID: 258
+	// (get) Token: 0x06000985 RID: 2437 RVA: 0x0002B550 File Offset: 0x00029750
+	// (set) Token: 0x06000986 RID: 2438 RVA: 0x0002B558 File Offset: 0x00029758
+	public Vector3 dir
+	{
+		get
+		{
+			return this._overrideDir;
+		}
+		set
+		{
+			this._overrideDir = value;
+		}
+	}
+
+	// Token: 0x17000103 RID: 259
+	// (get) Token: 0x06000987 RID: 2439 RVA: 0x0002B564 File Offset: 0x00029764
+	[PreviewInInspector]
+	public float FinalValue
+	{
+		get
+		{
+			if (!Application.isPlaying)
+			{
+				this.valueProvider = base.GetComponent<IEffectDealerValueProvider>();
+			}
+			IEffectDealerValueProvider effectDealerValueProvider = this.valueProvider;
+			if (effectDealerValueProvider == null)
+			{
+				return this.value + ((this.statData != null) ? this.statData.ValueWithBaseRatio : 0f);
+			}
+			return effectDealerValueProvider.Value;
+		}
+	}
+
+	// Token: 0x17000104 RID: 260
+	// (get) Token: 0x06000988 RID: 2440 RVA: 0x0002B5BB File Offset: 0x000297BB
+	public Collider2D MyCollider
+	{
+		get
+		{
+			return this._myCollider;
+		}
+	}
+
+	// Token: 0x06000989 RID: 2441 RVA: 0x0002B5C4 File Offset: 0x000297C4
+	private ValueTuple<bool, EffectReceiver> IsCanceledOfReceiverOwner(IEffectOwner receiverOwner)
+	{
+		foreach (EffectReceiver effectReceiver in this.CanceledByReceiverCandidates)
+		{
+			if (effectReceiver.IsCanceledOfReceiverOwner(receiverOwner))
+			{
+				return new ValueTuple<bool, EffectReceiver>(true, effectReceiver);
+			}
+		}
+		return new ValueTuple<bool, EffectReceiver>(false, null);
+	}
+
+	// Token: 0x0600098A RID: 2442 RVA: 0x0002B62C File Offset: 0x0002982C
+	public void OnEnable()
+	{
+		this.ClearAll();
+	}
+
+	// Token: 0x0600098B RID: 2443 RVA: 0x0002B634 File Offset: 0x00029834
+	public void ClearAll()
+	{
+		this.waitForReset = false;
+		this.triggedEnteredReceiver.Clear();
+		this._isCanceled = false;
+		this.CanceledByReceiverCandidates.Clear();
+		this.thisFrameReceivers.Clear();
+		this.lastFrameReceivers.Clear();
+		this.hittedReceivers.Clear();
+		this.hittedOwners.Clear();
+		this.enteredEffectReceiverSet.Clear();
+	}
+
+	// Token: 0x0600098C RID: 2444 RVA: 0x0002B69C File Offset: 0x0002989C
+	public void ForceClearAll()
+	{
+		this.ClearAll();
+	}
+
+	// Token: 0x0600098D RID: 2445 RVA: 0x0002B6A4 File Offset: 0x000298A4
+	public void Awake()
+	{
+		if (this.DirectionForward == null)
+		{
+			this.DirectionForward = base.transform;
+		}
+		this.DealerEffectOwner = base.GetComponentInParent<IEffectOwner>();
+	}
+
+	// Token: 0x0600098E RID: 2446 RVA: 0x0002B6CC File Offset: 0x000298CC
+	public Vector2 GetDirection()
+	{
+		if (this.DirectionForward == null)
+		{
+			this.DirectionForward = base.transform;
+		}
+		Vector2 result = this.DirectionForward.right;
+		result.x *= base.transform.lossyScale.x;
+		return result;
+	}
+
+	// Token: 0x0600098F RID: 2447 RVA: 0x0002B720 File Offset: 0x00029920
+	private void ResetAfterDelay()
+	{
+	}
+
+	// Token: 0x06000990 RID: 2448 RVA: 0x0002B724 File Offset: 0x00029924
+	public bool FacingRuleCheck(EffectReceiver receiver)
+	{
+		if (this.facingDetectionRule == FacingDetectionRule.FaceToFace || receiver.facingRule == FacingDetectionRule.FaceToFace)
+		{
+			return Vector2.Dot(this.GetDirection(), receiver.GetDirection()) < 0f;
+		}
+		return (this.facingDetectionRule != FacingDetectionRule.FaceToBack && receiver.facingRule != FacingDetectionRule.FaceToBack) || Vector2.Dot(this.GetDirection(), receiver.GetDirection()) >= 0f;
+	}
+
+	// Token: 0x06000991 RID: 2449 RVA: 0x0002B790 File Offset: 0x00029990
+	public bool FacingRuleCheck(DamageDealer damageDealer, Vector3 direction, Vector2 additionalInputCheck)
+	{
+		if (this.facingDetectionRule == FacingDetectionRule.IgnoreFacing || damageDealer.facingDetectionRule == FacingDetectionRule.IgnoreFacing)
+		{
+			return true;
+		}
+		if (this.facingDetectionRule == FacingDetectionRule.FaceToFace || damageDealer.facingDetectionRule == FacingDetectionRule.FaceToFace)
+		{
+			float num = Vector2.Dot(this.GetDirection(), direction);
+			float num2 = Vector2.Dot(additionalInputCheck, direction);
+			return num < 0f || num2 < 0f;
+		}
+		return true;
+	}
+
+	// Token: 0x06000992 RID: 2450 RVA: 0x0002B7F3 File Offset: 0x000299F3
+	[Conditional("UNITY_EDITOR")]
+	private void AddFailEntry(EffectReceiver receiver, string reason)
+	{
+		if (DebugSetting.IsDebugMode)
+		{
+			this.failEntryDict.TryAdd(receiver, reason);
+		}
+	}
+
+	// Token: 0x06000993 RID: 2451 RVA: 0x0002B80C File Offset: 0x00029A0C
+	public bool CanHitReceiver(EffectReceiver receiver)
+	{
+		if (!receiver.IsValid)
+		{
+			return false;
+		}
+		bool item = this.IsCanceledOfReceiverOwner(receiver.Owner).Item1;
+		return !item && (receiver.Owner != this.DealerEffectOwner || this.DealerEffectOwner == null) && (!this.IsWarning || receiver.IsReceiveWarning) && (receiver.StayHandler != null || receiver.Owner == null || !this.hittedOwners.Contains(receiver.Owner)) && this.EffectTypeMatchCheck(receiver);
+	}
+
+	// Token: 0x06000994 RID: 2452 RVA: 0x0002B892 File Offset: 0x00029A92
+	private bool EffectTypeMatchCheck(EffectReceiver receiver)
+	{
+		return (this.type & receiver.effectType) != (EffectType)0 && !(this.groupTag != receiver.groupTag);
+	}
+
+	// Token: 0x06000995 RID: 2453 RVA: 0x0002B8BB File Offset: 0x00029ABB
+	public void HitReceiverPrepare()
+	{
+		this.thisFrameReceivers.Clear();
+	}
+
+	// Token: 0x06000996 RID: 2454 RVA: 0x0002B8C8 File Offset: 0x00029AC8
+	public void HitReceiverPost()
+	{
+		this.lastFrameReceivers.Clear();
+		this.lastFrameReceivers.AddRange(this.thisFrameReceivers);
+	}
+
+	// Token: 0x06000997 RID: 2455 RVA: 0x0002B8E8 File Offset: 0x00029AE8
+	public static List<EffectReceiver> GetReceivers(Collider2D col)
+	{
+		List<EffectReceiver> result = EffectReceiver.EffectReceiverCache.Get(col);
+		if (EffectReceiver.EffectReceiverCache.Has(col))
+		{
+			return result;
+		}
+		EffectReceiveCollider effectReceiveCollider;
+		if (col.TryGetComponent<EffectReceiveCollider>(out effectReceiveCollider))
+		{
+			foreach (EffectReceiver effectReceiver in effectReceiveCollider.GetReceivers)
+			{
+				EffectReceiver.EffectReceiverCache.Add(col, effectReceiver, null);
+			}
+		}
+		else
+		{
+			EffectReceiver effectReceiver2 = col.TryGetComp<EffectReceiver>();
+			EffectReceiver.EffectReceiverCache.Add(col, effectReceiver2, null);
+			int childCount = col.transform.childCount;
+			for (int j = 0; j < childCount; j++)
+			{
+				EffectReceiver effectReceiver3 = col.transform.GetChild(j).TryGetComp<EffectReceiver>();
+				EffectReceiver.EffectReceiverCache.Add(col, effectReceiver3, null);
+			}
+		}
+		return EffectReceiver.EffectReceiverCache.Get(col);
+	}
+
+	// Token: 0x06000998 RID: 2456 RVA: 0x0002B9A8 File Offset: 0x00029BA8
+	public bool HitEffectReceiverCheck(Collider2D col, RaycastHit2D hit2D = default(RaycastHit2D))
+	{
+		if (!base.isActiveAndEnabled)
+		{
+			return false;
+		}
+		bool result = false;
+		foreach (EffectReceiver effectReceiver in EffectDealer.GetReceivers(col))
+		{
+			if (!(effectReceiver == null) && this.IsValid && this.CanHitReceiver(effectReceiver))
+			{
+				this.thisFrameReceivers.Add(effectReceiver);
+				EffectHitData effectHitData = EffectHitData.HitDataPool.Borrow();
+				effectHitData.Override(this, effectReceiver, new RaycastHit2D?(hit2D));
+				if (this.lastFrameReceivers.Contains(effectReceiver))
+				{
+					if (this.enteredEffectReceiverSet.Contains(effectReceiver))
+					{
+						if (!effectReceiver.isActiveAndEnabled)
+						{
+							continue;
+						}
+						if (effectReceiver.OnHitStayCheck(effectHitData))
+						{
+							this.OnEffectStay.Invoke(effectHitData);
+						}
+					}
+				}
+				else
+				{
+					this.LogTestState(this, "HitEnter");
+					effectReceiver.OnBeforeHitEnter(effectHitData);
+					EffectHitEvent onEffectEnter = this.OnEffectEnter;
+					if (onEffectEnter != null)
+					{
+						onEffectEnter.Invoke(effectHitData);
+					}
+					ICustomEffectDealer[] array = this.customDealers;
+					for (int i = 0; i < array.Length; i++)
+					{
+						array[i].OnEffectHit(effectHitData);
+					}
+					this.DelayShootEffect(effectReceiver, effectHitData);
+				}
+				result = true;
+				if (effectReceiver.Owner != null && this.DealerEffectOwner != null && effectReceiver.Owner.allianceType == this.DealerEffectOwner.allianceType)
+				{
+					return false;
+				}
+				if (effectReceiver.Owner != null)
+				{
+					this.CancelDealerCheck(effectReceiver);
+				}
+			}
+		}
+		return result;
+	}
+
+	// Token: 0x17000105 RID: 261
+	// (get) Token: 0x06000999 RID: 2457 RVA: 0x0002BB30 File Offset: 0x00029D30
+	public bool IsCanceled
+	{
+		get
+		{
+			return this._isCanceled;
+		}
+	}
+
+	// Token: 0x0600099A RID: 2458 RVA: 0x0002BB38 File Offset: 0x00029D38
+	private bool CancelDealerCheck(EffectReceiver receiver)
+	{
+		if (receiver.FxMaterialTag == null)
+		{
+			return false;
+		}
+		if (receiver.FxMaterialTag.IsForceCancelDealer && this.FxMaterialTag && !this.FxMaterialTag.ForcePreventCancelDealer)
+		{
+			this._isCanceled = true;
+		}
+		if (receiver.FxMaterialTag && receiver.FxMaterialTag.CancelDealerAfterHit)
+		{
+			if (!this.CanceledByReceiverCandidates.Contains(receiver))
+			{
+				this.CanceledByReceiverCandidates.Add(receiver);
+			}
+			UnityEngine.Debug.Log("CancelDealerCheck:" + ((receiver != null) ? receiver.ToString() : null), receiver);
+			return true;
+		}
+		return false;
+	}
+
+	// Token: 0x0600099B RID: 2459 RVA: 0x0002BBD8 File Offset: 0x00029DD8
+	private UniTask DelayShootEffect(EffectReceiver receiver, EffectHitData data)
+	{
+		EffectDealer.<DelayShootEffect>d__72 <DelayShootEffect>d__;
+		<DelayShootEffect>d__.<>t__builder = AsyncUniTaskMethodBuilder.Create();
+		<DelayShootEffect>d__.<>4__this = this;
+		<DelayShootEffect>d__.receiver = receiver;
+		<DelayShootEffect>d__.data = data;
+		<DelayShootEffect>d__.<>1__state = -1;
+		<DelayShootEffect>d__.<>t__builder.Start<EffectDealer.<DelayShootEffect>d__72>(ref <DelayShootEffect>d__);
+		return <DelayShootEffect>d__.<>t__builder.Task;
+	}
+
+	// Token: 0x0600099C RID: 2460 RVA: 0x0002BC2C File Offset: 0x00029E2C
+	private void HitEnterImplement(EffectReceiver receiver, EffectHitData data)
+	{
+		this._currentHitData = data;
+		receiver.OnHitEnter(data);
+		this.HitResult(data);
+		if (receiver.IsDetectOwner)
+		{
+			if (!this.hittedOwners.Contains(receiver.Owner))
+			{
+				this.hittedOwners.Add(receiver.Owner);
+			}
+			if (!this.hittedReceivers.Contains(receiver))
+			{
+				this.hittedReceivers.Add(receiver);
+			}
+		}
+	}
+
+	// Token: 0x0600099D RID: 2461 RVA: 0x0002BC95 File Offset: 0x00029E95
+	private void HitResult(EffectHitData data)
+	{
+		EffectHitResolveBinder effectHitResolveBinder = this.hitResolver;
+		if (effectHitResolveBinder != null)
+		{
+			EffectDealerHitResultPlayer dealerHitEffectPlayer = effectHitResolveBinder.dealerHitEffectPlayer;
+			if (dealerHitEffectPlayer != null)
+			{
+				dealerHitEffectPlayer.ReceivingEffect(data);
+			}
+		}
+		EffectDealerHitResultPlayer effectDealerHitResultPlayer = this.localPlayer;
+		if (effectDealerHitResultPlayer == null)
+		{
+			return;
+		}
+		effectDealerHitResultPlayer.ReceivingEffect(data);
+	}
+
+	// Token: 0x0600099E RID: 2462 RVA: 0x0002BCC8 File Offset: 0x00029EC8
+	public bool HitEffectSensorExitCheck(Collider2D col)
+	{
+		if (!EffectReceiver.EffectReceiverCache.Has(col))
+		{
+			return false;
+		}
+		foreach (EffectReceiver effectReceiver in EffectReceiver.EffectReceiverCache.Get(col))
+		{
+			if (!(effectReceiver == null) && this.EffectTypeMatchCheck(effectReceiver))
+			{
+				if (this.IsClearHitOwnerWhenExit)
+				{
+					this.hittedOwners.Remove(effectReceiver.Owner);
+					this.hittedReceivers.Remove(effectReceiver);
+					if (this.customDealers != null)
+					{
+						ICustomEffectDealer[] array = this.customDealers;
+						for (int i = 0; i < array.Length; i++)
+						{
+							array[i].OnEffectExit(effectReceiver);
+						}
+					}
+				}
+				effectReceiver.OnHitExit(this);
+				this.triggedEnteredReceiver.Remove(effectReceiver);
+				this.enteredEffectReceiverSet.Remove(effectReceiver);
+				this.thisFrameReceivers.Remove(effectReceiver);
+				this.lastFrameReceivers.Remove(effectReceiver);
+			}
+		}
+		return false;
+	}
+
+	// Token: 0x0600099F RID: 2463 RVA: 0x0002BDD0 File Offset: 0x00029FD0
+	public bool CanHitReceiver(IEffectReceiver receiver)
+	{
+		return this.CanHitReceiver(receiver as EffectReceiver);
+	}
+
+	// Token: 0x060009A0 RID: 2464 RVA: 0x0002BDDE File Offset: 0x00029FDE
+	public void EnterLevelReset()
+	{
+		this.ClearAll();
+	}
+
+	// Token: 0x060009A1 RID: 2465 RVA: 0x0002BDE6 File Offset: 0x00029FE6
+	public void ExitLevelAndDestroy()
+	{
+	}
+
+	// Token: 0x060009A2 RID: 2466 RVA: 0x0002BDE8 File Offset: 0x00029FE8
+	public void PoolOnReturnToPool()
+	{
+	}
+
+	// Token: 0x060009A3 RID: 2467 RVA: 0x0002BDEA File Offset: 0x00029FEA
+	public void PoolOnPrepared(PoolObject poolObj)
+	{
+	}
+
+	// Token: 0x060009A4 RID: 2468 RVA: 0x0002BDEC File Offset: 0x00029FEC
+	public void PoolBeforeReturnToPool()
+	{
+		if (this.poolCancelToken != null)
+		{
+			CancellationTokenSource cancellationTokenSource = this.poolCancelToken;
+			if (cancellationTokenSource != null)
+			{
+				cancellationTokenSource.Cancel();
+			}
+			CancellationTokenSource cancellationTokenSource2 = this.poolCancelToken;
+			if (cancellationTokenSource2 != null)
+			{
+				cancellationTokenSource2.Dispose();
+			}
+			this.poolCancelToken = null;
+		}
+	}
+
+	// Token: 0x060009A5 RID: 2469 RVA: 0x0002BE1F File Offset: 0x0002A01F
+	public void ClearReference()
+	{
+		this.ClearAll();
+	}
+
+	// Token: 0x0400078E RID: 1934
+	public EffectType type;
+
+	// Token: 0x0400078F RID: 1935
+	[Header("特效材質")]
+	[SerializeField]
+	private FXDealerMaterialTag fxMateiralTag;
+
+	// Token: 0x04000790 RID: 1936
+	[AutoChildren(false)]
+	private AbstractConditionComp[] conditions;
+
+	// Token: 0x04000791 RID: 1937
+	[PreviewInInspector]
+	[AutoParent(true)]
+	private EffectFXProvider fxProvider;
+
+	// Token: 0x04000792 RID: 1938
+	[Header("聲音材質")]
+	public SoundDealerMaterialTag soundMateiralTag;
+
+	// Token: 0x04000793 RID: 1939
+	[Header("客製特效")]
+	public PoolObject customFxObj;
+
+	// Token: 0x04000794 RID: 1940
+	[Header("客製音效")]
+	public SoundSO customSoundSO;
+
+	// Token: 0x04000795 RID: 1941
+	[PreviewInInspector]
+	[AutoChildren(false)]
+	private EffectDealerHitResultPlayer localPlayer;
+
+	// Token: 0x04000796 RID: 1942
+	[PreviewInInspector]
+	[AutoParent(false)]
+	private EffectHitResolveBinder hitResolver;
+
+	// Token: 0x04000797 RID: 1943
+	public AbstractStatData statData;
+
+	// Token: 0x04000798 RID: 1944
+	[PreviewInInspector]
+	[AutoParent(true)]
+	public Actor owner;
+
+	// Token: 0x04000799 RID: 1945
+	[FormerlySerializedAs("effectOwner")]
+	[AutoParent(true)]
+	public IEffectOwner DealerEffectOwner;
+
+	// Token: 0x0400079A RID: 1946
+	public string groupTag = "";
+
+	// Token: 0x0400079B RID: 1947
+	public string customField;
+
+	// Token: 0x0400079C RID: 1948
+	public EffectDetailType detailType;
+
+	// Token: 0x0400079D RID: 1949
+	public float value;
+
+	// Token: 0x0400079E RID: 1950
+	private Vector3 _overrideDir = Vector3.zero;
+
+	// Token: 0x0400079F RID: 1951
+	[PreviewInInspector]
+	[Auto(false)]
+	private IEffectDealerValueProvider valueProvider;
+
+	// Token: 0x040007A0 RID: 1952
+	public bool IsWarning;
+
+	// Token: 0x040007A1 RID: 1953
+	public Transform DirectionForward;
+
+	// Token: 0x040007A2 RID: 1954
+	public List<EffectReceiver> lastFrameReceivers = new List<EffectReceiver>();
+
+	// Token: 0x040007A3 RID: 1955
+	public List<EffectReceiver> thisFrameReceivers = new List<EffectReceiver>();
+
+	// Token: 0x040007A4 RID: 1956
+	private List<IEffectOwner> hittedOwners = new List<IEffectOwner>();
+
+	// Token: 0x040007A5 RID: 1957
+	private List<EffectReceiver> hittedReceivers = new List<EffectReceiver>();
+
+	// Token: 0x040007A6 RID: 1958
+	[PreviewInInspector]
+	[AutoParent(true)]
+	private Collider2D _myCollider;
+
+	// Token: 0x040007A7 RID: 1959
+	[PreviewInInspector]
+	private List<EffectReceiver> CanceledByReceiverCandidates = new List<EffectReceiver>();
+
+	// Token: 0x040007A8 RID: 1960
+	public FacingDetectionRule facingDetectionRule;
+
+	// Token: 0x040007A9 RID: 1961
+	private bool waitForReset;
+
+	// Token: 0x040007AA RID: 1962
+	[Header("已經有碰到了，但還不想進行判定結果可以走這個")]
+	[NonSerialized]
+	public readonly EffectHitEvent OnEffectBeforeEnter = new EffectHitEvent();
+
+	// Token: 0x040007AB RID: 1963
+	[Header("Deprecated")]
+	public EffectHitEvent OnEffectEnter;
+
+	// Token: 0x040007AC RID: 1964
+	[Header("確定發生了(可能delay)")]
+	[NonSerialized]
+	public EffectHitEvent OnEffectApply = new EffectHitEvent();
+
+	// Token: 0x040007AD RID: 1965
+	[Header("Deprecated")]
+	public EffectHitEvent OnEffectStay;
+
+	// Token: 0x040007AE RID: 1966
+	[Header("Deprecated")]
+	public EffectHitEvent OnEmitEffectEvent;
+
+	// Token: 0x040007AF RID: 1967
+	private Dictionary<EffectReceiver, string> failEntryDict = new Dictionary<EffectReceiver, string>();
+
+	// Token: 0x040007B0 RID: 1968
+	[PreviewInInspector]
+	private bool _isCanceled;
+
+	// Token: 0x040007B1 RID: 1969
+	private HashSet<EffectReceiver> enteredEffectReceiverSet = new HashSet<EffectReceiver>();
+
+	// Token: 0x040007B2 RID: 1970
+	[Auto(false)]
+	private IEffectFXTimingOverrider fxTimingOverrider;
+
+	// Token: 0x040007B3 RID: 1971
+	private EffectHitData _currentHitData;
+
+	// Token: 0x040007B4 RID: 1972
+	private List<EffectReceiver> triggedEnteredReceiver = new List<EffectReceiver>();
+
+	// Token: 0x040007B5 RID: 1973
+	[Header("離開作用對象就重置，適合不會動(不會關掉)的物體(陷阱)")]
+	public bool IsClearHitOwnerWhenExit;
+
+	// Token: 0x040007B6 RID: 1974
+	[AutoChildren(false)]
+	private ICustomEffectDealer[] customDealers;
+
+	// Token: 0x040007B7 RID: 1975
+	private CancellationTokenSource poolCancelToken = new CancellationTokenSource();
+}

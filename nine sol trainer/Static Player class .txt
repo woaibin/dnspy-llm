@@ -1,0 +1,47 @@
+[CommandPrefix("player.")]
+public class Player : Actor, IAnimatorProvider, IMultiSpriteProvider, IHealthProvider, IPlayer, ILevelDestroy
+{
+	// Token: 0x17000451 RID: 1105
+	// (get) Token: 0x06002101 RID: 8449 RVA: 0x00083615 File Offset: 0x00081815
+	public static Player i
+	{
+		get
+		{
+			if (!SingletonBehaviour<GameCore>.IsAvailable())
+			{
+				return null;
+			}
+			return SingletonBehaviour<GameCore>.Instance.player;
+		}
+	}
+
+	// Token: 0x04001AB2 RID: 6834
+	public EffectDealer normalAttackDealer;
+
+	// Token: 0x04001AB3 RID: 6835
+	public EffectDealer thirdAttackDealer;
+
+	// Token: 0x04001AB4 RID: 6836
+	public EffectDealer fooEffectDealer;
+
+	// Token: 0x04001AB5 RID: 6837
+	public EffectDealer parryReflectDealer;
+
+	// Token: 0x04001AB6 RID: 6838
+	public EffectDealer chargeParryDealer;
+
+	// Token: 0x04001AB7 RID: 6839
+	public EffectDealer WeaknessExplode;
+
+	// Token: 0x04001AB8 RID: 6840
+	public EffectDealer JumpSpinKickDealer;
+
+	// Token: 0x04001AB9 RID: 6841
+	public EffectDealer fooExplodeDealer;
+
+	// Token: 0x04001ABA RID: 6842
+	public EffectDealer hackBackStabDealer;
+
+	// Token: 0x04001ABB RID: 6843
+	public EffectDealer AxeShieldBreakDealer;
+}

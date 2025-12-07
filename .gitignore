@@ -1,0 +1,31 @@
+/.vs/
+/packages/
+/.idea/
+
+# Python cache / logs
+__pycache__/
+*.pyc
+py_err.log
+py_llm_backend.log
+py_llm_backend_request.json
+
+# Build logs / temp files
+build_*.log
+restore*.log
+llm_automation_server_input.json
+llm_automation_server.stdin
+claude_stdout_raw.txt
+temp_prompts.md
+test_analyzed_project*.json
+
+# Node / NPM
+package-lock.json
+node_modules/
+
+# NineSolTrainer build output
+/nine sol trainer/NineSolTrainer/NineSolTrainer/bin/
+/nine sol trainer/NineSolTrainer/NineSolTrainer/obj/
+
+# Local appdata dump
+${APPDATA}/
+
